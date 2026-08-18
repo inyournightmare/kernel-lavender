@@ -1,4 +1,4 @@
-name: Build EAS Kernel with KernelSU Next (Dynamic Support)
+name: Build EAS Kernel (Dynamic & KSUN)
 
 on:
   workflow_dispatch:
@@ -10,12 +10,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libncursesw5-dev libglib2.0-dev zip unzip git curl wget
-
-      - name: Clone Toolchain (Proton Clang 13)
+      - name: Clone Toolchain (Proton Clang)
         run: |
           mkdir -p toolchain
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
@@ -31,22 +26,17 @@ jobs:
           grep -q "obj-y += kernelsu/" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
-      - name: Patch Defconfig for EAS, KSUN & Dynamic Partitions
+      - name: Patch Defconfig (EAS & Dynamic)
         run: |
           cd kernel_source
           DEFCONFIG_FILE="arch/arm64/configs/lavender_defconfig"
           if [ -f "$DEFCONFIG_FILE" ]; then
-            # Root KernelSU Next
             echo "CONFIG_KSU=y" >> $DEFCONFIG_FILE
             echo "CONFIG_KSU_TAMPER_SYS_CALLS=y" >> $DEFCONFIG_FILE
-            
-            # Dukungan Dynamic Partitions (crDroid Android 16)
             echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG_FILE
             echo "CONFIG_EROFS_FS=y" >> $DEFCONFIG_FILE
             echo "CONFIG_EROFS_FS_ZIP=y" >> $DEFCONFIG_FILE
             echo "CONFIG_DM_BOW=y" >> $DEFCONFIG_FILE
-            
-            # Optimasi EAS
             echo "CONFIG_ENERGY_MODEL=y" >> $DEFCONFIG_FILE
             echo "CONFIG_DEFAULT_USE_ENERGY_AWARE=y" >> $DEFCONFIG_FILE
           fi
@@ -65,23 +55,20 @@ jobs:
           make lavender_defconfig
           make -j$(nproc) O=out
 
-      - name: Package with AnyKernel3 (Dynamic Auto-Detect)
+      - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          
           if [ -f "kernel_source/out/arch/arm64/boot/Image.gz-dtb" ]; then
             cp kernel_source/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           elif [ -f "kernel_source/out/arch/arm64/boot/Image.gz" ]; then
             cp kernel_source/out/arch/arm64/boot/Image.gz AnyKernel3/
           fi
-          
           cd AnyKernel3
           sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.1\/by-name\/boot;/block=auto;/' anykernel.sh
           sed -i 's/is_slot_device=1;/is_slot_device=0;/' anykernel.sh
-          
           zip -r9 EAS-KSUN-Lavender-Dynamic.zip * -x .git README.md
 
-      - name: Upload Flashable ZIP Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: EAS-KSUN-Lavender-Dynamic
