@@ -10,23 +10,17 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Fast Install Dependencies
-        run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y bc bison flex libssl-dev libncurses5-dev libncursesw5-dev zip unzip git curl wget
-
       - name: Clone Toolchain (Azure Clang)
         run: |
           mkdir -p toolchain
           cd toolchain
           git clone --depth=1 https://gitlab.com/panchajanya1999/azure-clang.git clang
 
-      - name: Clone Kernel Source (Lavender EAS)
+      - name: Clone Kernel Source (Southwest Lavender)
         run: |
-          # Menggunakan repo kernel EAS 4.19 lavender
-          git clone --depth=1 https://github.com/PocoF1-Lavender-Builds/android_kernel_xiaomi_lavender -b 4.19 kernel_source || git clone --depth=1 https://github.com/pix106/android_kernel_xiaomi_southwest-4.19 -b main kernel_source
+          git clone --depth=1 https://github.com/pix106/android_kernel_xiaomi_southwest-4.19 -b main kernel_source
 
-      - name: Setup KernelSU Next (Direct Integration)
+      - name: Setup KernelSU Next
         run: |
           cd kernel_source
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next drivers/kernelsu
@@ -89,3 +83,4 @@ jobs:
         with:
           name: EAS-KSUN-Lavender-Dynamic
           path: AnyKernel3/EAS-KSUN-Lavender-Dynamic.zip
+          
