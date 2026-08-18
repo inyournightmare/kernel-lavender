@@ -5,21 +5,20 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Fix Missing Multilib Libraries
+      - name: Install Dependencies
         run: |
           sudo apt-get update -y || true
-          sudo apt-get install -y build-essential gcc-multilib g++-multilib libc6-dev-i386 lib32z1-dev bc bison flex libssl-dev libncurses5-dev libncursesw5-dev zip unzip git curl wget
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libncursesw5-dev libglib2.0-dev zip unzip git curl wget
 
-      - name: Clone Toolchain (Azure Clang)
+      - name: Clone Toolchain (Proton Clang 13)
         run: |
           mkdir -p toolchain
-          cd toolchain
-          git clone --depth=1 https://gitlab.com/panchajanya1999/azure-clang.git clang
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
 
       - name: Clone Kernel Source (Southwest Lavender)
         run: |
@@ -47,7 +46,7 @@ jobs:
             echo "CONFIG_EROFS_FS_ZIP=y" >> $DEFCONFIG_FILE
             echo "CONFIG_DM_BOW=y" >> $DEFCONFIG_FILE
             
-            # Optimasi EAS (Energy Aware Scheduling)
+            # Optimasi EAS
             echo "CONFIG_ENERGY_MODEL=y" >> $DEFCONFIG_FILE
             echo "CONFIG_DEFAULT_USE_ENERGY_AWARE=y" >> $DEFCONFIG_FILE
           fi
@@ -58,10 +57,9 @@ jobs:
           export PATH="$(pwd)/../toolchain/clang/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
+          export CC=clang
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
 
           make mrproper
           make lavender_defconfig
