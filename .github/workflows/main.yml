@@ -10,6 +10,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Fix Missing Multilib Libraries
+        run: |
+          sudo apt-get update -y || true
+          sudo apt-get install -y build-essential gcc-multilib g++-multilib libc6-dev-i386 lib32z1-dev bc bison flex libssl-dev libncurses5-dev libncursesw5-dev zip unzip git curl wget
+
       - name: Clone Toolchain (Azure Clang)
         run: |
           mkdir -p toolchain
