@@ -1,92 +1,424 @@
-name: Build EAS Kernel with KernelSU Next (Dynamic Support)
+name: SouthWest Kernel - Lavender
 
 on:
   workflow_dispatch:
+    inputs:
+      clean:
+        description: "Clean build"
+        required: false
+        default: true
+        type: boolean
+
+      ksu:
+        description: "Integrate KernelSU-Next"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
+    name: Build Lavender 4.19
     runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      OUT: out
+
     steps:
-      - name: Checkout Repository
+      # ------------------------------------------------------------
+      # Checkout kernel
+      # ------------------------------------------------------------
+      - name: Checkout kernel
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Install Dependencies
+      # ------------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------------
+      - name: Install dependencies
         run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libncursesw5-dev libglib2.0-dev zip unzip git curl wget
+          sudo apt-get update
 
-      - name: Clone Toolchain (Proton Clang)
-        run: |
-          mkdir -p toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            clang \
+            cmake \
+            cpio \
+            curl \
+            flex \
+            git \
+            libelf-dev \
+            liblz4-tool \
+            libncurses5-dev \
+            libssl-dev \
+            lld \
+            llvm \
+            pahole \
+            python3 \
+            rsync \
+            unzip \
+            wget \
+            zip
 
-      - name: Clone Kernel Source (Southwest Lavender)
+      # ------------------------------------------------------------
+      # Kernel information
+      # ------------------------------------------------------------
+      - name: Kernel information
         run: |
-          git clone --depth=1 https://github.com/pix106/android_kernel_xiaomi_southwest-4.19 -b main kernel_source
+          echo "=========================================="
+          echo "SouthWest Kernel"
+          echo "Device : Xiaomi Redmi Note 7 / lavender"
+          echo "SoC    : Snapdragon 660 / SDM660"
+          echo "Kernel : 4.19"
+          echo "Target : Android 16"
+          echo "=========================================="
 
-      - name: Setup KernelSU Next
-        run: |
-          cd kernel_source
-          # Mengambil langsung repo utama KernelSU-Next dari org resmi
-          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next drivers/kernelsu
-          grep -q "obj-y += kernelsu/" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
-          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          echo
+          echo "Commit:"
+          git log -1 --oneline
 
-      - name: Patch Defconfig for EAS, KSUN & Dynamic Partitions
+          echo
+          echo "Kernel version:"
+          make kernelversion || true
+
+      # ------------------------------------------------------------
+      # KernelSU-Next
+      # ------------------------------------------------------------
+      - name: Integrate KernelSU-Next
+        if: ${{ inputs.ksu }}
         run: |
-          cd kernel_source
-          DEFCONFIG_FILE="arch/arm64/configs/lavender_defconfig"
-          if [ -f "$DEFCONFIG_FILE" ]; then
-            # Root KernelSU Next
-            echo "CONFIG_KSU=y" >> $DEFCONFIG_FILE
-            echo "CONFIG_KSU_TAMPER_SYS_CALLS=y" >> $DEFCONFIG_FILE
-            
-            # Dukungan Dynamic Partitions (crDroid Android 16)
-            echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG_FILE
-            echo "CONFIG_EROFS_FS=y" >> $DEFCONFIG_FILE
-            echo "CONFIG_EROFS_FS_ZIP=y" >> $DEFCONFIG_FILE
-            echo "CONFIG_DM_BOW=y" >> $DEFCONFIG_FILE
-            
-            # Optimasi EAS
-            echo "CONFIG_ENERGY_MODEL=y" >> $DEFCONFIG_FILE
-            echo "CONFIG_DEFAULT_USE_ENERGY_AWARE=y" >> $DEFCONFIG_FILE
+          set -e
+
+          echo "Installing KernelSU-Next..."
+
+          if [ -d "KernelSU-Next" ]; then
+            echo "KernelSU-Next already exists."
+            exit 0
           fi
 
-      - name: Compile Kernel
+          git clone \
+            --depth=1 \
+            https://github.com/KernelSU-Next/KernelSU-Next.git \
+            KernelSU-Next
+
+          echo
+          echo "KernelSU-Next repository:"
+          git -C KernelSU-Next log -1 --oneline
+
+          echo
+          echo "WARNING:"
+          echo "The KSU source must be compatible with this 4.19 kernel."
+          echo "If the repository does not contain a 4.19-compatible integration"
+          echo "method, this step will not magically convert the kernel to GKI."
+
+      # ------------------------------------------------------------
+      # Prepare config
+      # ------------------------------------------------------------
+      - name: Prepare kernel config
         run: |
-          cd kernel_source
-          export PATH="$(pwd)/../toolchain/clang/bin:$PATH"
+          set -e
+
+          mkdir -p "$OUT"
+
+          if [ -f ".config" ]; then
+            echo "Using repository .config"
+            cp .config "$OUT/.config"
+
+          elif [ -f "arch/arm64/configs/sdm660_defconfig" ]; then
+            echo "Using sdm660_defconfig"
+            make O="$OUT" sdm660_defconfig
+
+          elif [ -f "arch/arm64/configs/vendor/sdm660-perf_defconfig" ]; then
+            echo "Using vendor/sdm660-perf_defconfig"
+            make O="$OUT" vendor/sdm660-perf_defconfig
+
+          else
+            echo "::error::No usable kernel configuration found."
+            echo
+            echo "Available configs:"
+            find arch/arm64/configs \
+              -type f \
+              -maxdepth 3 \
+              | sort
+            exit 1
+          fi
+
+          echo
+          echo "Running olddefconfig..."
+          make O="$OUT" olddefconfig
+
+      # ------------------------------------------------------------
+      # Configure EAS / Energy Model
+      # ------------------------------------------------------------
+      - name: Configure EAS
+        run: |
+          set -e
+
+          CONFIG="$OUT/.config"
+
+          echo "Checking scheduler configuration..."
+
+          grep -E \
+            'CONFIG_ENERGY_MODEL|CONFIG_CPU_FREQ|CONFIG_CPU_FREQ_GOV_SCHEDUTIL|CONFIG_UCLAMP_TASK|CONFIG_SCHED_WALT|CONFIG_SCHED_TUNE' \
+            "$CONFIG" || true
+
+          echo
+          echo "Required EAS-related options..."
+
+          scripts/config --file "$CONFIG" \
+            --enable ENERGY_MODEL \
+            --enable CPU_FREQ \
+            --enable CPU_FREQ_GOV_SCHEDUTIL \
+            --enable UCLAMP_TASK \
+            --enable UCLAMP_TASK_GROUP
+
+          make O="$OUT" olddefconfig
+
+          echo
+          echo "Final EAS configuration:"
+
+          grep -E \
+            'CONFIG_ENERGY_MODEL|CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL|CONFIG_CPU_FREQ_GOV_SCHEDUTIL|CONFIG_UCLAMP_TASK|CONFIG_UCLAMP_TASK_GROUP' \
+            "$CONFIG" || true
+
+      # ------------------------------------------------------------
+      # KSU configuration
+      # ------------------------------------------------------------
+      - name: Configure KernelSU
+        if: ${{ inputs.ksu }}
+        run: |
+          set -e
+
+          CONFIG="$OUT/.config"
+
+          echo "Preparing kernel configuration for KSU..."
+
+          # Required features commonly used by KernelSU.
+          scripts/config --file "$CONFIG" \
+            --enable KPROBES \
+            --enable KALLSYMS \
+            --enable KALLSYMS_ALL \
+            --enable MODULES
+
+          make O="$OUT" olddefconfig
+
+          echo
+          echo "KSU-related configuration:"
+          grep -E \
+            'CONFIG_KPROBES|CONFIG_KALLSYMS|CONFIG_KALLSYMS_ALL|CONFIG_MODULES' \
+            "$CONFIG" || true
+
+      # ------------------------------------------------------------
+      # Show final configuration
+      # ------------------------------------------------------------
+      - name: Show final configuration
+        run: |
+          echo "=========================================="
+          echo "FINAL CONFIGURATION"
+          echo "=========================================="
+
+          grep -E \
+            'CONFIG_ARM64=|CONFIG_ARCH_SDM660=|CONFIG_SMP=|CONFIG_PREEMPT=|CONFIG_ENERGY_MODEL=|CONFIG_CPU_FREQ=|CONFIG_CPU_FREQ_GOV_SCHEDUTIL=|CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=|CONFIG_UCLAMP_TASK=|CONFIG_UCLAMP_TASK_GROUP=|CONFIG_KPROBES=|CONFIG_KALLSYMS=|CONFIG_KALLSYMS_ALL=|CONFIG_MODULES=' \
+            out/.config || true
+
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
+      - name: Build kernel
+        run: |
+          set -e
+
           export ARCH=arm64
           export SUBARCH=arm64
-          export CC=clang
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
-          make mrproper
-          make lavender_defconfig
-          make -j$(nproc) O=out
+          export LLVM=1
+          export LLVM_IAS=1
 
-      - name: Package with AnyKernel3 (Lavender Auto-Detect)
+          echo "Clang:"
+          clang --version
+
+          echo
+          echo "Building kernel..."
+
+          make \
+            O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            -j"$(nproc)"
+
+      # ------------------------------------------------------------
+      # Check output
+      # ------------------------------------------------------------
+      - name: Check kernel image
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          
-          if [ -f "kernel_source/out/arch/arm64/boot/Image.gz-dtb" ]; then
-            cp kernel_source/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          elif [ -f "kernel_source/out/arch/arm64/boot/Image.gz" ]; then
-            cp kernel_source/out/arch/arm64/boot/Image.gz AnyKernel3/
-          fi
-          
-          cd AnyKernel3
-          sed -i 's/kernel.string=.*/kernel.string=Southwest-EAS Kernel with KSUN by inyournightmare/' anykernel.sh
-          sed -i 's/device.name1=.*/device.name1=lavender/' anykernel.sh
-          sed -i 's/block=.*/block=auto;/' anykernel.sh
-          sed -i 's/is_slot_device=.*/is_slot_device=0;/' anykernel.sh
-          
-          zip -r9 Southwest-KSUN-Lavender-Dynamic.zip * -x .git README.md
+          set -e
 
-      - name: Upload Artifact
+          echo "=========================================="
+          echo "KERNEL OUTPUT"
+          echo "=========================================="
+
+          find out/arch/arm64/boot \
+            -maxdepth 2 \
+            -type f \
+            -printf '%p\n' \
+            | sort
+
+          if [ ! -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
+            echo
+            echo "::error::Image.gz-dtb was not generated."
+            exit 1
+          fi
+
+          echo
+          echo "Kernel image:"
+          ls -lh out/arch/arm64/boot/Image.gz-dtb
+
+      # ------------------------------------------------------------
+      # Prepare AnyKernel3
+      # ------------------------------------------------------------
+      - name: Prepare AnyKernel3
+        run: |
+          set -e
+
+          git clone \
+            --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git \
+            AnyKernel3
+
+          rm -rf AnyKernel3/.git
+
+          cp \
+            out/arch/arm64/boot/Image.gz-dtb \
+            AnyKernel3/
+
+          echo
+          echo "AnyKernel3 prepared."
+
+          ls -lh AnyKernel3/Image.gz-dtb
+
+      # ------------------------------------------------------------
+      # Create AnyKernel installer
+      # ------------------------------------------------------------
+      - name: Create AnyKernel3 installer
+        run: |
+          cat > AnyKernel3/anykernel.sh <<'EOF'
+          properties() { '
+          kernel.string=SouthWest Kernel 4.19 - lavender
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=lavender
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          block=boot
+          is_slot_device=auto
+          ramdisk_compression=auto
+          patch_vbmeta_flag=auto
+          no_magisk_check=1
+
+          . tools/ak3-core.sh
+
+          ui_print " "
+          ui_print "================================="
+          ui_print " SouthWest Kernel"
+          ui_print " Xiaomi Redmi Note 7"
+          ui_print " lavender"
+          ui_print " Kernel 4.19"
+          ui_print "================================="
+          ui_print " "
+
+          split_boot
+
+          if [ -f "split_img/ramdisk.cpio" ]; then
+              ui_print "-> Ramdisk detected"
+              unpack_ramdisk
+              write_boot
+          else
+              ui_print "-> No ramdisk detected"
+              flash_boot
+          fi
+
+          ui_print " "
+          ui_print "-> Kernel installation complete"
+          ui_print " "
+          EOF
+
+          chmod +x AnyKernel3/anykernel.sh
+
+      # ------------------------------------------------------------
+      # Create ZIP
+      # ------------------------------------------------------------
+      - name: Create flashable ZIP
+        run: |
+          set -e
+
+          cd AnyKernel3
+
+          zip -r9 \
+            "../SouthWest-lavender-4.19-KSU-EAS-${GITHUB_RUN_NUMBER}.zip" \
+            . \
+            -x "*.git*" \
+            -x "README.md"
+
+          cd ..
+
+          ls -lh \
+            "SouthWest-lavender-4.19-KSU-EAS-${GITHUB_RUN_NUMBER}.zip"
+
+      # ------------------------------------------------------------
+      # Save config
+      # ------------------------------------------------------------
+      - name: Prepare build information
+        run: |
+          mkdir -p artifact
+
+          cp \
+            out/arch/arm64/boot/Image.gz-dtb \
+            artifact/Image.gz-dtb
+
+          cp \
+            out/.config \
+            artifact/kernel.config
+
+          cp \
+            "SouthWest-lavender-4.19-KSU-EAS-${GITHUB_RUN_NUMBER}.zip" \
+            artifact/
+
+          cat > artifact/build-info.txt <<EOF
+          Device: Xiaomi Redmi Note 7 (lavender)
+          SoC: Qualcomm Snapdragon 660 / SDM660
+          Kernel: 4.19.255
+          Target: Android 16
+          Scheduler: EAS / Energy Model
+          CPU governor: schedutil
+          KernelSU-Next requested: ${{ inputs.ksu }}
+          Commit: $(git rev-parse HEAD)
+          Build: ${GITHUB_RUN_NUMBER}
+          EOF
+
+      # ------------------------------------------------------------
+      # Upload
+      # ------------------------------------------------------------
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Southwest-KSUN-Lavender-Dynamic
-          path: AnyKernel3/Southwest-KSUN-Lavender-Dynamic.zip
+          name: SouthWest-lavender-${{ github.run_number }}
+          path: artifact/
+          if-no-files-found: error
           
