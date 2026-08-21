@@ -1,2 +1,0 @@
-find arch/arm64/configs -type f | sort
-find . -maxdepth 3 -type d \( -iname '*kernelsu*' -o -iname '*ksu*' \)
